@@ -20,6 +20,7 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
   const [permissionDenied, setPermissionDenied] = useState(false)
   const [connectedUsers, setConnectedUsers] = useState<string[]>([])
   const [peerStatus, setPeerStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected")
+  const [connectionError, setConnectionError] = useState<string | null>(null)
 
   const localVideoRef = useRef<HTMLVideoElement>(null)
   const remoteVideosRef = useRef<HTMLDivElement>(null)
@@ -33,11 +34,41 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
   const constraints = {
     audio: true,
     video: {
-      width: { max: 300 },
-      height: { max: 300 },
+      width: { ideal: 320 },
+      height: { ideal: 240 },
       facingMode: { ideal: "user" },
     },
   }
+
+  // Use multiple TURN servers for better connectivity
+  const iceServers = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
+    { urls: "stun:stun4.l.google.com:19302" },
+    { urls: "stun:stun.stunprotocol.org:3478" },
+    {
+      urls: "turn:numb.viagenie.ca",
+      username: "webrtc@live.com",
+      credential: "muazkh",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443?transport=tcp",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+  ]
 
   useEffect(() => {
     // Get username from localStorage
@@ -70,7 +101,10 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
   const setupMediaDevices = async () => {
     try {
       // Only request media access when starting a call
+      console.log("Requesting media access...")
       const stream = await navigator.mediaDevices.getUserMedia(constraints)
+      console.log("Media access granted", stream.getTracks())
+
       localStreamRef.current = stream
 
       if (localVideoRef.current) {
@@ -82,12 +116,15 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
     } catch (error) {
       console.error("Error accessing media devices:", error)
       setPermissionDenied(true)
+      setConnectionError("Camera/microphone access denied")
       return false
     }
   }
 
   const subscribeToVideoMessages = () => {
     if (!stompClient) return
+
+    console.log(`Subscribing to video messages for room ${roomId}`)
 
     // Subscribe to broadcast messages (JOIN, LEAVE)
     subscriptionRef.current = stompClient.subscribe(`/topic/video/${roomId}`, onVideoMessageReceived)
@@ -110,31 +147,28 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
       peerRef.current.destroy()
     }
 
+    setConnectionError(null)
     setPeerStatus("connecting")
+    console.log("Initializing PeerJS...")
 
     // Create a new Peer with the username as ID
     const peer = new Peer(usernameRef.current, {
       debug: 3, // Increase log level for debugging
       config: {
-        iceServers: [
-          { urls: "stun:stun.l.google.com:19302" },
-          { urls: "stun:global.stun.twilio.com:3478" },
-          {
-            urls: "turn:global.turn.twilio.com:3478",
-            username: "dummy",
-            credential: "dummy",
-          },
-        ],
+        iceServers,
+        iceCandidatePoolSize: 10,
+        sdpSemantics: "unified-plan",
       },
     })
 
     peer.on("open", (id) => {
-      console.log("My peer ID is: " + id)
+      console.log("PeerJS connection established. My peer ID is: " + id)
       setPeerStatus("connected")
 
       // Call existing peers once our connection is established
       connectedUsers.forEach((user) => {
         if (!connectionsRef.current[user]) {
+          console.log(`Initiating call to existing user: ${user}`)
           callPeer(user)
         }
       })
@@ -143,6 +177,18 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
     peer.on("error", (err) => {
       console.error("PeerJS error:", err)
       setPeerStatus("disconnected")
+      setConnectionError(`Connection error: ${err.type}`)
+    })
+
+    peer.on("disconnected", () => {
+      console.log("PeerJS disconnected")
+      setPeerStatus("disconnected")
+
+      // Try to reconnect
+      setTimeout(() => {
+        console.log("Attempting to reconnect...")
+        peer.reconnect()
+      }, 3000)
     })
 
     peer.on("call", (call) => {
@@ -150,10 +196,11 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
 
       // Answer the call with our local stream
       if (localStreamRef.current) {
+        console.log(`Answering call from ${call.peer}`)
         call.answer(localStreamRef.current)
-        console.log("Answered call with local stream")
       } else {
         console.error("Cannot answer call - no local stream")
+        setConnectionError("Cannot answer call - no camera access")
       }
 
       // Handle incoming stream
@@ -163,11 +210,12 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
       })
 
       call.on("close", () => {
+        console.log(`Call from ${call.peer} closed`)
         removeRemoteStream(call.peer)
       })
 
       call.on("error", (err) => {
-        console.error("Call error:", err)
+        console.error(`Call error with ${call.peer}:`, err)
       })
 
       // Store the call
@@ -183,6 +231,8 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
       return
     }
 
+    setConnectionError(null)
+
     // Only initialize media devices when starting a call
     const success = await setupMediaDevices()
     if (!success) {
@@ -192,6 +242,7 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
 
     if (!localStreamRef.current) {
       console.error("Local stream not available")
+      setConnectionError("Failed to access camera")
       return
     }
 
@@ -204,6 +255,7 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
 
     if (stompClient && connectionStatus === "connected") {
       // Notify others that we're joining the video call
+      console.log(`Notifying others that we're joining room ${roomId}`)
       stompClient.publish({
         destination: `/app/video.join/${roomId}`,
         body: JSON.stringify({
@@ -215,6 +267,8 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
   }
 
   const endVideoCall = () => {
+    console.log("Ending video call")
+
     if (peerRef.current) {
       peerRef.current.destroy()
       peerRef.current = null
@@ -254,6 +308,7 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
 
     setVideoCallActive(false)
     setPeerStatus("disconnected")
+    setConnectionError(null)
   }
 
   const toggleMic = () => {
@@ -292,7 +347,9 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
 
     try {
       // Call the peer
-      const call = peerRef.current.call(peerId, localStreamRef.current)
+      const call = peerRef.current.call(peerId, localStreamRef.current, {
+        metadata: { caller: usernameRef.current },
+      })
 
       if (!call) {
         console.error(`Failed to create call to ${peerId}`)
@@ -346,7 +403,27 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
     video.dataset.user = peerId
     video.srcObject = stream
 
+    // Add audio/video track indicators
+    const hasAudio = stream.getAudioTracks().length > 0 && stream.getAudioTracks()[0].enabled
+    const hasVideo = stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled
+
+    const indicators = document.createElement("div")
+    indicators.className = "absolute bottom-3 right-3 flex gap-1"
+    indicators.innerHTML = `
+      <span class="p-1 rounded-full ${hasAudio ? "bg-green-500" : "bg-red-500"}" title="${hasAudio ? "Mic on" : "Mic off"}">
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          ${hasAudio ? '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><path d="M12 19v3"></path>' : '<line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V5a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2c0 .74-.16 1.44-.44 2.06"></path><path d="M12 19v3"></path>'}
+        </svg>
+      </span>
+      <span class="p-1 rounded-full ${hasVideo ? "bg-green-500" : "bg-red-500"}" title="${hasVideo ? "Camera on" : "Camera off"}">
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          ${hasVideo ? '<path d="m22 8-6 4 6 4V8Z"></path><rect width="14" height="12" x="2" y="6" rx="2" ry="2"></rect>' : '<path d="M10.66 6H14a2 2 0 0 1 2 2v2.34l1 1L22 8v8"></path><path d="M16 16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2l10 10Z"></path><line x1="1" y1="1" x2="23" y2="23"></line>'}
+        </svg>
+      </span>
+    `
+
     videoBox.appendChild(video)
+    videoBox.appendChild(indicators)
     remoteVideosRef.current.appendChild(videoBox)
 
     // Update connected users
@@ -381,51 +458,66 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
   }
 
   const onVideoMessageReceived = (message: IMessage) => {
-    const receivedMessage = JSON.parse(message.body)
-    const username = usernameRef.current
+    try {
+      const receivedMessage = JSON.parse(message.body)
+      const username = usernameRef.current
 
-    console.log("Received video message:", receivedMessage)
+      console.log("Received video message:", receivedMessage)
 
-    if (receivedMessage.type === "JOIN" && receivedMessage.from !== username) {
-      console.log("User joined:", receivedMessage.from)
+      if (receivedMessage.type === "JOIN" && receivedMessage.from !== username) {
+        console.log("User joined:", receivedMessage.from)
 
-      // Update connected users
-      setConnectedUsers((prev) => {
-        if (!prev.includes(receivedMessage.from)) {
-          return [...prev, receivedMessage.from]
-        }
-        return prev
-      })
-
-      if (videoCallActive && peerRef.current && peerRef.current.id) {
-        // Call the new peer that joined
-        callPeer(receivedMessage.from)
-      }
-    } else if (receivedMessage.type === "USER_LIST") {
-      const users = receivedMessage.data || []
-      console.log("Received user list:", users)
-
-      // Update connected users
-      setConnectedUsers(users.filter((user: string) => user !== username))
-
-      if (videoCallActive && peerRef.current && peerStatus === "connected") {
-        // Call all peers in the room
-        users.forEach((user: string) => {
-          if (user !== username && !connectionsRef.current[user]) {
-            callPeer(user)
+        // Update connected users
+        setConnectedUsers((prev) => {
+          if (!prev.includes(receivedMessage.from)) {
+            return [...prev, receivedMessage.from]
           }
+          return prev
         })
-      }
-    } else if (receivedMessage.type === "LEAVE") {
-      console.log("User left:", receivedMessage.from)
 
-      // Update connected users
-      setConnectedUsers((prev) => prev.filter((user) => user !== receivedMessage.from))
+        if (videoCallActive && peerRef.current && peerStatus === "connected") {
+          // Call the new peer that joined
+          console.log(`Initiating call to newly joined user: ${receivedMessage.from}`)
+          callPeer(receivedMessage.from)
+        }
+      } else if (receivedMessage.type === "USER_LIST") {
+        const users = receivedMessage.data || []
+        console.log("Received user list:", users)
 
-      // Close and remove the connection
-      if (connectionsRef.current[receivedMessage.from]) {
-        removeRemoteStream(receivedMessage.from)
+        // Update connected users
+        setConnectedUsers(users.filter((user: string) => user !== username))
+
+        if (videoCallActive && peerRef.current && peerStatus === "connected") {
+          // Call all peers in the room
+          users.forEach((user: string) => {
+            if (user !== username && !connectionsRef.current[user]) {
+              console.log(`Initiating call to existing user from user list: ${user}`)
+              callPeer(user)
+            }
+          })
+        }
+      } else if (receivedMessage.type === "LEAVE") {
+        console.log("User left:", receivedMessage.from)
+
+        // Update connected users
+        setConnectedUsers((prev) => prev.filter((user) => user !== receivedMessage.from))
+
+        // Close and remove the connection
+        if (connectionsRef.current[receivedMessage.from]) {
+          removeRemoteStream(receivedMessage.from)
+        }
       }
+    } catch (error) {
+      console.error("Error processing video message:", error)
+    }
+  }
+
+  const reconnectPeer = () => {
+    console.log("Manually reconnecting peer...")
+    if (localStreamRef.current) {
+      initializePeer()
+    } else {
+      startVideoCall()
     }
   }
 
@@ -471,6 +563,12 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
         </CardTitle>
       </CardHeader>
       <CardContent className="flex-1 flex flex-col overflow-hidden p-4">
+        {connectionError && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded mb-4 text-sm">
+            {connectionError}
+          </div>
+        )}
+
         <div className="mb-4">
           <div className="video-box relative border rounded p-2">
             <h3 className="text-sm font-medium mb-1">You</h3>
@@ -507,7 +605,7 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
                   {cameraEnabled ? <Video size={18} /> : <VideoOff size={18} />}
                 </Button>
                 {peerStatus !== "connected" && (
-                  <Button variant="outline" size="icon" onClick={initializePeer} title="Reconnect PeerJS">
+                  <Button variant="outline" size="icon" onClick={reconnectPeer} title="Reconnect PeerJS">
                     <RefreshCw size={18} />
                   </Button>
                 )}
