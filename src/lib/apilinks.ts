@@ -1,0 +1,1 @@
+export const apiLinks = "https://a73b-171-252-154-24.ngrok-free.app"
