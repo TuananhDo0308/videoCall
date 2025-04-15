@@ -49,25 +49,11 @@ export default function VideoCall({ roomId, stompClient, connectionStatus }: Vid
     { urls: "stun:stun4.l.google.com:19302" },
     { urls: "stun:stun.stunprotocol.org:3478" },
     {
-      urls: "turn:numb.viagenie.ca",
-      username: "webrtc@live.com",
-      credential: "muazkh",
+      urls: "relay1.expressturn.com:3478",
+      username: "ef9666N0EV3QUJKGM2",
+      credential: "tMZbctI93CqSj86S",
     },
-    {
-      urls: "turn:openrelay.metered.ca:80",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: "turn:openrelay.metered.ca:443",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: "turn:openrelay.metered.ca:443?transport=tcp",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
+    
   ]
 
   useEffect(() => {
