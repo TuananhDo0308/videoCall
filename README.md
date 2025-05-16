@@ -261,17 +261,6 @@ Admins can:
 
 ---
 
-## Team Contributions
-
-| Name               | Student ID      | Role                            | Contributions                                      |
-|--------------------|-----------------|---------------------------------|---------------------------------------------------|
-| Trần Quốc Ấn      | 48.01.104.002   | Documenter/Tester               | Wrote Chapter 4 content, tested demo application  |
-| Đỗ Trần Tuấn Anh   | 48.01.104.010   | Frontend Developer              | Built demo application, led UI/UX design         |
-| Nguyễn Quốc Hưng   | 48.01.104.054   | Presenter/Documenter            | Prepared report and PowerPoint slides            |
-| Trần Quốc Long     | 48.01.104.085   | Documenter                      | Wrote Chapters 3 and 5 content                   |
-| Trần Đào Bá Thành | 48.01.104.124   | Documenter                      | Wrote Chapters 1 and 2 content                   |
-
----
 
 ## License
 
